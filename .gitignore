@@ -1,0 +1,40 @@
+# Experiment reports (generated at runtime)
+**/reports/
+
+# Kind cluster state
+.kind/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.code-workspace
+
+# Temporary files
+*.tmp
+*.bak
+*.log
+
+# Helm charts (downloaded)
+charts/
+
+# Terraform state (if using Terraform for infra)
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Kubeconfig (local)
+kubeconfig
+kubeconfig.*
