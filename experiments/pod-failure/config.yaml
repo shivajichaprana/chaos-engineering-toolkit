@@ -1,0 +1,47 @@
+# ==============================================================================
+# Pod Failure Experiment Configuration
+# ==============================================================================
+# This configuration controls the behavior of the pod failure chaos experiment.
+# The experiment deletes random pods from a target deployment and validates
+# that Kubernetes reschedules replacements within the recovery timeout.
+# ==============================================================================
+
+# Target deployment to inject chaos into
+target_deployment: sample-app
+
+# Kubernetes namespace where the target deployment runs
+namespace: chaos-testing
+
+# Number of pods to randomly delete during the experiment
+# Must be less than the total number of running replicas
+pods_to_kill: 1
+
+# Maximum time (seconds) to wait for the system to recover to steady state
+# If pods are not rescheduled within this window, the experiment fails
+recovery_timeout: 120
+
+# HTTP endpoint to check for service health during validation
+# Leave empty to skip endpoint health checks
+# Example: http://localhost:30080/healthz (via NodePort)
+health_endpoint: "http://localhost:30080/healthz"
+
+# Grace period (seconds) for pod deletion
+# 0 = force delete immediately (most disruptive, realistic failure simulation)
+# 30 = default Kubernetes grace period (allows graceful shutdown)
+grace_period: 0
+
+# Time (seconds) to wait after chaos injection before starting validation
+# Gives the system a brief window to detect the failure and begin recovery
+observation_period: 10
+
+# Interval (seconds) between validation polls during recovery
+poll_interval: 5
+
+# ==============================================================================
+# Tuning Guide
+# ==============================================================================
+# - For aggressive testing: pods_to_kill=2, grace_period=0, recovery_timeout=60
+# - For production-like testing: pods_to_kill=1, grace_period=30, recovery_timeout=180
+# - For stress testing: increase pods_to_kill to (replicas - 1) to test with
+#   only one surviving pod
+# ==============================================================================
