@@ -1,0 +1,75 @@
+# ==============================================================================
+# Network Chaos Experiment Configuration
+# ==============================================================================
+# This configuration controls the behavior of the network latency injection
+# chaos experiment. The experiment uses tc (traffic control) to inject network
+# latency into target pods and validates that the application handles degraded
+# connectivity within acceptable response time thresholds.
+# ==============================================================================
+
+# Target deployment to inject network latency into
+target_deployment: sample-app
+
+# Kubernetes namespace where the target deployment runs
+namespace: chaos-testing
+
+# Latency to inject in milliseconds
+# This value is added to existing network latency on the target pod's eth0
+latency_ms: 200
+
+# Jitter (variation) in milliseconds for injected latency
+# Creates realistic network conditions — actual delay = latency_ms ± jitter_ms
+jitter_ms: 50
+
+# Duration (seconds) to keep latency injection active before rolling back
+# The experiment injects latency, observes behavior, then removes the tc rules
+chaos_duration: 60
+
+# Maximum acceptable response time (milliseconds) during chaos injection
+# If the application's p95 response time exceeds this, the experiment fails
+# This validates that circuit breakers, timeouts, and retries work correctly
+acceptable_response_time_ms: 2000
+
+# HTTP endpoint to probe for response time measurement
+# Must be accessible from within the cluster or via NodePort/port-forward
+health_endpoint: "http://localhost:30080/healthz"
+
+# Number of health probes to send during the chaos window
+# Probes are evenly distributed across the chaos_duration
+probe_count: 10
+
+# Maximum time (seconds) to wait for the system to recover after removing
+# tc rules — response times should return to baseline within this window
+recovery_timeout: 90
+
+# Time (seconds) to wait after injecting latency before starting validation
+# Gives the system time to detect degraded conditions and activate fallbacks
+observation_period: 10
+
+# Interval (seconds) between validation polls during recovery
+poll_interval: 5
+
+# Network interface inside the target pod to apply tc rules to
+# Default is eth0 which works for most container networking setups
+target_interface: eth0
+
+# Packet loss percentage to inject alongside latency (optional)
+# Set to 0 to inject only latency without packet loss
+# Realistic degradation: 1-5% loss combined with latency
+packet_loss_percent: 0
+
+# ==============================================================================
+# Tuning Guide
+# ==============================================================================
+# - Light degradation: latency_ms=50, jitter_ms=10, packet_loss_percent=0
+#   Tests baseline timeout handling and response time budgets
+#
+# - Moderate degradation: latency_ms=200, jitter_ms=50, packet_loss_percent=1
+#   Tests circuit breaker activation and retry logic
+#
+# - Severe degradation: latency_ms=500, jitter_ms=200, packet_loss_percent=5
+#   Tests graceful degradation, fallback responses, and queue backpressure
+#
+# - Network partition simulation: latency_ms=5000, packet_loss_percent=50
+#   Tests split-brain handling and consensus protocol resilience
+# ==============================================================================
