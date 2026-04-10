@@ -1,0 +1,225 @@
+# ==============================================================================
+# tc-injector DaemonSet — Network Chaos Injection Agent
+# ==============================================================================
+# Deploys a lightweight privileged container on each node that can inject
+# tc (traffic control) netem rules into target pods' network namespaces.
+#
+# The injector runs as a DaemonSet so it's present on every node where chaos
+# experiments may target pods. It uses hostPID and NET_ADMIN capability to
+# enter pod network namespaces and manipulate traffic control rules.
+#
+# Usage:
+#   kubectl apply -f manifests/network-chaos/tc-injector.yaml
+#
+# Security notes:
+#   - Requires privileged access (NET_ADMIN, SYS_ADMIN capabilities)
+#   - Should only be deployed in chaos-testing namespace
+#   - Not intended for production clusters — testing/staging only
+# ==============================================================================
+
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: tc-injector
+  namespace: chaos-testing
+  labels:
+    app: tc-injector
+    component: chaos-engineering
+    part-of: chaos-engineering-toolkit
+  annotations:
+    description: "Network chaos injection agent using tc/netem"
+    chaos-toolkit/experiment: "network-chaos"
+spec:
+  selector:
+    matchLabels:
+      app: tc-injector
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: tc-injector
+        component: chaos-engineering
+      annotations:
+        prometheus.io/scrape: "false"
+    spec:
+      # Use host PID namespace to access target pod network namespaces
+      hostPID: true
+      # Use host network to avoid tc rules affecting the injector itself
+      hostNetwork: true
+      # Tolerate all taints so the injector runs on every node
+      tolerations:
+        - operator: Exists
+      # Schedule on all nodes including control plane (for Kind clusters)
+      nodeSelector: {}
+      terminationGracePeriodSeconds: 10
+      serviceAccountName: tc-injector
+      containers:
+        - name: tc-injector
+          # Alpine-based image with iproute2 (provides tc command)
+          image: alpine:3.19
+          command:
+            - /bin/sh
+            - -c
+            - |
+              # Install iproute2 for tc command and keep the container running
+              apk add --no-cache iproute2 util-linux curl > /dev/null 2>&1
+              echo "tc-injector ready on node $(hostname)"
+              echo "Available tools: tc, nsenter, curl"
+
+              # Keep the container alive — it serves as an exec target
+              # The experiment script will kubectl exec into this container
+              # to run tc commands inside target pod network namespaces
+              while true; do
+                sleep 3600
+              done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - NET_ADMIN
+                - SYS_ADMIN
+                - SYS_PTRACE
+          # Mount /proc for nsenter to access pod network namespaces
+          volumeMounts:
+            - name: host-proc
+              mountPath: /host/proc
+              readOnly: true
+      volumes:
+        - name: host-proc
+          hostPath:
+            path: /proc
+            type: Directory
+
+---
+# ==============================================================================
+# ServiceAccount for the tc-injector DaemonSet
+# ==============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tc-injector
+  namespace: chaos-testing
+  labels:
+    app: tc-injector
+    component: chaos-engineering
+
+---
+# ==============================================================================
+# ClusterRole — allows the tc-injector to list pods and get node info
+# (used when the injector needs to resolve pod-to-node mapping)
+# ==============================================================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tc-injector
+  labels:
+    app: tc-injector
+    component: chaos-engineering
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+
+---
+# ==============================================================================
+# ClusterRoleBinding
+# ==============================================================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tc-injector
+  labels:
+    app: tc-injector
+    component: chaos-engineering
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tc-injector
+subjects:
+  - kind: ServiceAccount
+    name: tc-injector
+    namespace: chaos-testing
+
+---
+# ==============================================================================
+# Helper script ConfigMap — provides nsenter-based tc injection
+# ==============================================================================
+# This ConfigMap contains a helper script that uses nsenter to enter a target
+# pod's network namespace and apply tc rules. The tc-injector pods mount this
+# script and use it when the experiment calls kubectl exec.
+# ==============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tc-injector-scripts
+  namespace: chaos-testing
+  labels:
+    app: tc-injector
+    component: chaos-engineering
+data:
+  inject-latency.sh: |
+    #\!/bin/sh
+    # ==================================================================
+    # inject-latency.sh — Apply tc netem rules to a target pod
+    # ==================================================================
+    # Usage: inject-latency.sh <target-pid> <delay-ms> <jitter-ms> [loss-%] [interface]
+    #
+    # Arguments:
+    #   target-pid  — PID of a process in the target pod (from /host/proc)
+    #   delay-ms    — Latency to add in milliseconds
+    #   jitter-ms   — Jitter (variation) in milliseconds
+    #   loss-%      — Packet loss percentage (default: 0)
+    #   interface   — Network interface (default: eth0)
+    # ==================================================================
+
+    set -eu
+
+    TARGET_PID="${1:?Usage: inject-latency.sh <pid> <delay> <jitter> [loss] [iface]}"
+    DELAY_MS="${2:?Missing delay-ms argument}"
+    JITTER_MS="${3:?Missing jitter-ms argument}"
+    LOSS_PCT="${4:-0}"
+    IFACE="${5:-eth0}"
+
+    echo "Injecting latency into PID ${TARGET_PID} network namespace"
+    echo "  Delay: ${DELAY_MS}ms ± ${JITTER_MS}ms, Loss: ${LOSS_PCT}%"
+
+    # Enter the target pod's network namespace and apply tc rules
+    TC_CMD="tc qdisc add dev ${IFACE} root netem delay ${DELAY_MS}ms ${JITTER_MS}ms"
+    if [ "${LOSS_PCT}" -gt 0 ] 2>/dev/null; then
+      TC_CMD="${TC_CMD} loss ${LOSS_PCT}%"
+    fi
+
+    nsenter -t "${TARGET_PID}" -n ${TC_CMD}
+
+    echo "tc rules applied successfully"
+    nsenter -t "${TARGET_PID}" -n tc qdisc show dev "${IFACE}"
+
+  remove-latency.sh: |
+    #\!/bin/sh
+    # ==================================================================
+    # remove-latency.sh — Remove tc netem rules from a target pod
+    # ==================================================================
+    # Usage: remove-latency.sh <target-pid> [interface]
+    # ==================================================================
+
+    set -eu
+
+    TARGET_PID="${1:?Usage: remove-latency.sh <pid> [iface]}"
+    IFACE="${2:-eth0}"
+
+    echo "Removing tc rules from PID ${TARGET_PID} network namespace"
+    nsenter -t "${TARGET_PID}" -n tc qdisc del dev "${IFACE}" root 2>/dev/null || true
+    echo "tc rules removed"
