@@ -1,0 +1,80 @@
+# ==============================================================================
+# Node Drain Experiment Configuration
+# ==============================================================================
+# This configuration controls the behavior of the node drain chaos experiment.
+# The experiment cordons and drains a worker node, validates that
+# PodDisruptionBudgets are respected, pods reschedule to healthy nodes, and
+# the service remains available throughout the operation.
+# ==============================================================================
+
+# Target deployment whose pods will be evicted during the drain
+target_deployment: sample-app
+
+# Kubernetes namespace where the target deployment runs
+namespace: chaos-testing
+
+# Node selection strategy — how to choose which node to drain
+# Options:
+#   random      — select a random worker node (excludes control-plane)
+#   specific    — drain the node named in specific_node below
+#   most-loaded — drain the worker node running the most pods
+node_selection_strategy: random
+
+# Specific node name (required when node_selection_strategy is "specific")
+# Ignored for random and most-loaded strategies
+specific_node: ""
+
+# Maximum time (seconds) to wait for the drain operation to complete
+# If evictions take longer than this, the drain is aborted
+# Increase this for clusters with slow pod termination or large PDB constraints
+drain_timeout: 120
+
+# Grace period (seconds) for pod eviction during drain
+# 0  = force-evict immediately (most disruptive, tests worst-case recovery)
+# 30 = default Kubernetes graceful shutdown (allows in-flight request completion)
+grace_period: 30
+
+# Maximum time (seconds) to wait for pods to reschedule after drain completes
+# If pod count doesn't recover to steady-state within this window, the test fails
+recovery_timeout: 180
+
+# HTTP endpoint to probe for service availability during and after the drain
+# Must be reachable from the machine running the experiment (e.g., via NodePort)
+# Leave empty to skip health checks
+health_endpoint: "http://localhost:30080/healthz"
+
+# Time (seconds) to wait after drain completes before starting validation
+# Gives the scheduler time to place evicted pods onto remaining nodes
+observation_period: 15
+
+# Interval (seconds) between validation polls during the recovery window
+poll_interval: 5
+
+# Whether to delete emptyDir data during drain (--delete-emptydir-data flag)
+# Set to true for realistic testing — pods with emptyDir volumes are evicted
+# Set to false if pods use emptyDir for critical local caching
+delete_local_data: true
+
+# Whether to ignore DaemonSet-managed pods during drain (--ignore-daemonsets)
+# Almost always true — DaemonSet pods can't be rescheduled to other nodes
+ignore_daemonsets: true
+
+# ==============================================================================
+# Tuning Guide
+# ==============================================================================
+# - Gentle test (validates PDB + rescheduling):
+#     node_selection_strategy=random, grace_period=30, drain_timeout=120
+#     Best for initial validation that PDBs and scheduling constraints work.
+#
+# - Aggressive test (simulates sudden node failure):
+#     node_selection_strategy=most-loaded, grace_period=0, drain_timeout=60
+#     Tests recovery when the busiest node is abruptly removed from service.
+#
+# - Targeted test (validates specific node dependency):
+#     node_selection_strategy=specific, specific_node=<node-name>
+#     Useful when testing zone-aware scheduling or node affinity rules.
+#
+# - Production-like test (extended timeline):
+#     grace_period=60, drain_timeout=300, recovery_timeout=300
+#     Mirrors production drain behavior during planned maintenance windows.
+# ==============================================================================
