@@ -1,0 +1,50 @@
+# ==============================================================================
+# PodDisruptionBudget — Sample Application
+# ==============================================================================
+# Ensures a minimum number of sample-app pods remain available during
+# voluntary disruptions (node drains, cluster upgrades, autoscaler scale-down).
+#
+# Key behavior:
+#   - Kubernetes will NOT evict a pod if doing so would drop the number of
+#     available pods below minAvailable
+#   - DaemonSet pods, mirror pods, and pods without controllers are exempt
+#   - Involuntary disruptions (node crash, OOM kill) bypass PDB constraints
+#
+# This PDB works alongside the sample-app Deployment (3 replicas) to guarantee
+# that at least 2 pods are always serving traffic during planned disruptions.
+# ==============================================================================
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: sample-app-pdb
+  namespace: chaos-testing
+  labels:
+    app: sample-app
+    component: disruption-budget
+    managed-by: chaos-engineering-toolkit
+  annotations:
+    description: "Guarantees minimum 2 available pods during voluntary disruptions"
+spec:
+  # Minimum number of pods that must remain available during voluntary disruptions.
+  # With 3 replicas and minAvailable=2, only 1 pod can be evicted at a time.
+  # This ensures the service maintains capacity during rolling updates and node drains.
+  #
+  # Alternative: use maxUnavailable instead of minAvailable
+  #   maxUnavailable: 1    — allows at most 1 pod to be unavailable
+  #   This is equivalent to minAvailable: 2 when replicas=3, but scales better
+  #   with HPA because it doesn't require updating the PDB when replica count changes.
+  minAvailable: 2
+
+  # Label selector must match the pods managed by the target Deployment.
+  # This ties the PDB to the sample-app Deployment's pod template labels.
+  selector:
+    matchLabels:
+      app: sample-app
+
+  # unhealthyPodEvictionPolicy controls whether unhealthy pods count toward
+  # the disruption budget. Available in Kubernetes 1.27+ (beta).
+  # Options:
+  #   IfHealthy (default) — unhealthy pods can be evicted regardless of PDB
+  #   AlwaysAllow — always allow eviction of unhealthy pods
+  # Uncomment for Kubernetes 1.27+:
+  # unhealthyPodEvictionPolicy: IfHealthy
