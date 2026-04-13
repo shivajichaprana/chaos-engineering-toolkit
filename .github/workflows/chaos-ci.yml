@@ -1,0 +1,125 @@
+name: Chaos Engineering CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: ShellCheck Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Run ShellCheck on library scripts
+        run: |
+          echo "==> Linting lib/ scripts..."
+          shellcheck -x -s bash lib/*.sh
+
+      - name: Run ShellCheck on experiment scripts
+        run: |
+          echo "==> Linting experiment scripts..."
+          find experiments/ -name "*.sh" -exec shellcheck -x -s bash {} +
+
+      - name: Run ShellCheck on helper scripts
+        run: |
+          echo "==> Linting scripts/ directory..."
+          shellcheck -x -s bash scripts/*.sh
+
+  bats-tests:
+    name: BATS Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install BATS
+        run: |
+          git clone https://github.com/bats-core/bats-core.git /tmp/bats-core
+          sudo /tmp/bats-core/install.sh /usr/local
+
+      - name: Run BATS tests
+        run: |
+          echo "==> Running unit tests..."
+          bats tests/*.bats
+
+  validate-manifests:
+    name: Validate Kubernetes Manifests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install kubeval
+        run: |
+          wget -q https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz
+          tar xf kubeval-linux-amd64.tar.gz
+          sudo mv kubeval /usr/local/bin/
+
+      - name: Validate sample-app manifests
+        run: |
+          echo "==> Validating sample-app manifests..."
+          kubeval --strict manifests/sample-app/deployment.yaml
+          kubeval --strict manifests/sample-app/service.yaml
+          kubeval --strict manifests/sample-app/hpa.yaml
+          kubeval --strict manifests/sample-app/pdb.yaml
+
+      - name: Validate network-chaos manifests
+        run: |
+          echo "==> Validating network-chaos manifests..."
+          kubeval --strict manifests/network-chaos/tc-injector.yaml
+
+  validate-kind-config:
+    name: Validate Kind Config
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Kind
+        run: |
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+
+      - name: Validate Kind configuration
+        run: |
+          echo "==> Validating Kind cluster config..."
+          kind create cluster --config kind-config.yaml --name ci-validation-test
+          echo "==> Cluster created successfully, cleaning up..."
+          kind delete cluster --name ci-validation-test
+
+  validate-dashboard:
+    name: Validate Grafana Dashboard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate dashboard JSON
+        run: |
+          echo "==> Validating Grafana dashboard JSON..."
+          python3 -c "
+          import json, sys
+          with open('dashboards/chaos-experiment.json') as f:
+              dashboard = json.load(f)
+          required_keys = ['dashboard']
+          for key in required_keys:
+              if key not in dashboard:
+                  print(f'Missing required key: {key}')
+                  sys.exit(1)
+          panels = dashboard['dashboard'].get('panels', [])
+          if len(panels) == 0:
+              print('Dashboard has no panels')
+              sys.exit(1)
+          print(f'Dashboard valid: {len(panels)} panels found')
+          "
