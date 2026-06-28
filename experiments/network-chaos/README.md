@@ -88,7 +88,7 @@ Edit `config.yaml` to tune the experiment:
 # Run with custom config
 ./experiments/network-chaos/experiment.sh --config path/to/config.yaml
 
-# Run via Makefile (once added in Day 17)
+# Run via Makefile
 make run-network-chaos
 ```
 
